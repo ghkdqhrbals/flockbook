@@ -1,6 +1,6 @@
 import { beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
-import Flockbook from "../mods/flockbook/main.js";
+import { SideView } from "../mods/flockbook/side.js";
 import { command, TopView } from "../mods/flockbook/top.js";
 import { currentAgent, currentTerminal, showAgent, shownScreen } from "../mods/flockbook/state.js";
 import { act } from "../mods/flockbook/menu.js";
@@ -13,13 +13,6 @@ const tab = (id, active, panes = 1) => ({ id, name: id, named: true, active, pan
 const pane = (id, address, tab, focused = false) => ({ pane: id, terminal: address, tab, focused });
 const term = (address, parent, extra) => ({ address, parent, state: "live", ...extra });
 const click = (el, id) => byId(el, id)._h.on_click({}, fakeCx());
-function picker() {
-  fake.props = { ...log.overlays.at(-1).props, overlay: "picker" };
-  const view = new Flockbook();
-  view.init(null, fakeCx());
-  return view.render(fakeCx());
-}
-
 beforeEach(() => {
   reset();
   fake.spaces = [space("s", { tabs: [tab("shell", true), tab("work", false, 2)] })];
@@ -33,16 +26,21 @@ beforeEach(() => {
 test("Agents opens the live family tree; rows carry full addresses, including nested and kept children", () => {
   const top = new TopView(fakeCx());
   click(top.render(), "agents");
-  assert.equal(log.overlays.at(-1).props.view, "agents");
-  const el = picker();
+  assert.deepEqual(log.run, [["layout.show", { id: "sidebar" }]]);
+  command("agents");
+  assert.equal(log.run.length, 1, "opening the already visible sidebar keeps it open");
+  assert.equal(log.overlays.length, 0);
+  assert.equal(byId(top.render(), "agents"), null, "the open sidebar owns the list");
+  const el = new SideView(fakeCx()).render();
   assert.deepEqual(log.order, ["t1", "t2", "box/t2", "t3"]);
   assert.equal(byId(el, "agent-list").kids.length, 4);
-  assert.match(textOf(byId(el, "agent-t1")), /Parent.*t1/);
-  assert.match(textOf(byId(el, "agent-t2")), /Review.*Child of t1.*t2/);
-  assert.match(textOf(byId(el, "agent-box/t2")), /Child of t2.*box\/t2/);
+  assert.match(textOf(byId(el, "agent-t1")), /t1/);
+  assert.match(textOf(byId(el, "agent-t2")), /↳ Review t2/);
+  assert.match(textOf(byId(el, "agent-box/t2")), /↳ Remote reviewer box\/t2/);
   assert.equal(byId(el, "agent-t4"), null);
+  log.run = [];
   click(el, "agent-box/t2");
-  assert.deepEqual(log.closed, ["picker"]);
+  assert.deepEqual(log.closed ?? [], []);
   assert.deepEqual(log.run, [["tab.select", { id: "work" }], ["layout.select", { stack: "screen", child: "chat" }]]);
   fake.spaces[0].tabs.forEach((t) => { t.active = t.id === "work"; });
   top.sync();
@@ -53,10 +51,28 @@ test("Agents opens the live family tree; rows carry full addresses, including ne
   assert.deepEqual(log.overlays.at(-1).layout.children.at(-1).content, { terminal: "box/t2" });
 });
 
+for (const floating of [false, true]) {
+  test(`the ${floating ? "floating" : "docked"} sidebar shows subagent IDs and opens the clicked child's chat`, () => {
+    fake.props = floating ? { view: "side", peek: true, overlay: "peek" } : { view: "side" };
+    const sidebar = new SideView(fakeCx()).render();
+    const list = byId(sidebar, "agent-list");
+    assert.deepEqual(list.kids.map((row) => row._a.id), ["agent-t1", "agent-t2", "agent-box/t2", "agent-t3"]);
+    assert.match(textOf(byId(list, "agent-box/t2")), /↳ Remote reviewer box\/t2/);
+    click(list, "agent-box/t2");
+    assert.deepEqual(log.closed ?? [], floating ? ["peek"] : []);
+    fake.spaces[0].tabs.forEach((t) => { t.active = t.id === "work"; });
+    assert.equal(currentAgent().address, "box/t2");
+    assert.equal(shownScreen(), "chat");
+  });
+}
+
 test("standalone hc families open against their own address without adopting them or changing tabs", () => {
   fake.terminals.push(term("t7", null, { status: "working" }), term("t8", "t7"), term("t9", null));
   command("agents");
-  const el = picker();
+  assert.deepEqual(log.run, [["layout.show", { id: "sidebar" }]]);
+  assert.equal(log.overlays.length, 0);
+  log.run = [];
+  const el = new SideView(fakeCx()).render();
   assert.ok(byId(el, "agent-t7"));
   assert.equal(byId(el, "agent-t9"), null, "unrelated standalone shells are outside the directory");
   click(el, "agent-t8");

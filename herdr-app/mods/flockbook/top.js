@@ -3,6 +3,7 @@
 import { div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared } from "herdr";
+import { agentTree } from "./agent-tree.js";
 import { openMenu, tabItems } from "./menu.js";
 import { spaceAgents, spaceTabs, activeTab, currentTerminal, currentAgent, splitTarget, splitWork, finishLeftSplit, pickedChatFor, showAgent, tabLabel, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
   SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge } from "./state.js";
@@ -36,7 +37,7 @@ export function lightsRoom() {
 export const BAR_H = 56;
 
 function openAgents() {
-  return openOverlay({ mod: "flockbook", props: { view: "agents" }, kind: "dialog", width: 460, height: 0.6 });
+  if (!sidebarShown()) toggleSidebar();
 }
 
 // The tab being dragged (drag.js): one at a time, so every copy of the bar draws from it.
@@ -104,10 +105,10 @@ export function syncScreen(owner) {
 // content, so only the capsules and buttons have a background and the rest shows what scrolls
 // under it.
 export function topBar(t, over = false) {
-  setAgentOrder(spaceAgents().map((a) => a.address));
+  const side = sidebarShown();
+  setAgentOrder((side ? agentTree() : spaceAgents()).map((a) => a.address));
   const tabs = spaceTabs();
   const cur = currentTerminal();
-  const side = sidebarShown();
   // While the sidebar is hidden, the sidebar button sits right of the window buttons; while it
   // shows, the button is in the sidebar (side.js) and the bar starts at its edge.
   const left = side ? 12 : lightsRoom();
@@ -169,7 +170,7 @@ export function topBar(t, over = false) {
     .w_auto().px(8).text_size(12).font_medium();
   const tab = activeTab(), canSplit = splitTarget(), chat = currentAgent();
   const tools = capsule("tools").px(5).gap(4)
-    .child(labelButton("agents", "Agents", openAgents, "Open an agent conversation"))
+    .when(!side, (el) => el.child(labelButton("agents", "Agents", openAgents, "Show agents in the sidebar")))
     .when(Boolean(canSplit), (el) => el.child(labelButton("split-menu", "Split ▾", () => openMenu([
       { label: "Split left", act: "split", args: { tab: tab.id, direction: "left" } },
       { label: "Split right", act: "split", args: { tab: tab.id, direction: "right" } },

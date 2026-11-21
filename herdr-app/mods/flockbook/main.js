@@ -2,7 +2,6 @@
 // ("top", "side", "chat", "needs", "overview"; "settings" is the settings dialog). One folder, because a mod cannot import another mod's files.
 import { View, div } from "gpui-kit";
 import { theme, props } from "herdr";
-import { AgentsView } from "./agents.js";
 import { TopView } from "./top.js";
 import { SideView } from "./side.js";
 import { ChatView } from "./chat.js";
@@ -12,7 +11,7 @@ import { OverviewView } from "./overview.js";
 import { MenuView } from "./menu.js";
 import { SettingsView } from "./settings.js";
 
-const VIEWS = { agents: AgentsView, top: TopView, side: SideView, chat: ChatView, needs: NeedsView, termbar: TermBar, overview: OverviewView, menu: MenuView, settings: SettingsView };
+const VIEWS = { top: TopView, side: SideView, chat: ChatView, needs: NeedsView, termbar: TermBar, overview: OverviewView, menu: MenuView, settings: SettingsView };
 
 export default class Flockbook extends View {
   // The block's props come from props(); init's first argument is not them.

@@ -3,8 +3,10 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { theme, spaces, run, openOverlay, closeOverlay, props } from "herdr";
+import { agentTree } from "./agent-tree.js";
+import { agentList } from "./agents.js";
 import { openMenu, spaceItems } from "./menu.js";
-import { needing, showNeeds, showOverview, showSettings, shownScreen, icon, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING } from "./state.js";
+import { needing, showNeeds, showOverview, showSettings, shownScreen, icon, showAgent, showSpace, toggleSidebar, sidebarShown, peekClosed, PEEK_W, PEEK_GAP, SPRING } from "./state.js";
 import { statusMark, lightsRoom, BAR_H } from "./top.js";
 import { updateLine } from "./settings.js";
 import { updateSeen } from "./config.js";
@@ -118,6 +120,8 @@ export class SideView {
       .child(row("side-new", "plus", "New tab", () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 })))
       .child(row("side-needs", "bell", "Needs you", () => showNeeds(), badge, screen === "needs"))
       .child(row("side-overview", "grid", "Overview", () => showOverview(), null, screen === "overview"))
+      .child(div().mt(14).mb(2).px(10).text_size(11.5).font_semibold().text_color(t.muted).child("Agents"))
+      .child(agentList(t, agentTree(), (address) => { this.leave(); showAgent(address); }))
       .child(h_flex().mt(14).mb(2).px(10).items_center()
         .child(div().flex_1().text_size(11.5).font_semibold().text_color(t.muted).child("Workspaces"))
         .child(div().id("space-new").size(20).rounded(5).flex().items_center().justify_center().text_color(t.muted)
