@@ -211,7 +211,19 @@ test("messages for a missing sidecar, a wrong protocol and a non-agent terminal"
   assert.match(missing, /helper is missing\. Get it from github\.com\/minchenlee\/flockbook\/releases\./);
   assert.match(await show(() => jl({ ...header, protocol: 2 }, end)), /protocol 2; this mod needs 1/);
   assert.match(await show(() => jl(header, { type: "error", code: "not-agent", message: "t1 runs no agent" }, { type: "end", ok: false })), /runs no agent/);
-  assert.match(await show(() => jl(header, logLine("c1", null), { type: "splice", at: 0, count: 0 }, end)), /No conversation yet/);
+});
+
+test("an unresolved transcript opens the selected terminal and a known empty log shows no messages", async () => {
+  let path = null;
+  fake.exec = () => jl(header, logLine("c1", path), { type: "splice", at: 0, count: 0 }, end);
+  const cx = fakeCx(); const view = new ChatView(cx); await cx.settle();
+  const pending = view.render(cx);
+  assert.match(textOf(pending), /Looking for this agent’s conversation/);
+  byId(pending, "unlinked-terminal")._h.on_click({}, cx);
+  assert.equal(log.overlays.at(-1).layout.children.at(-1).content.terminal, "t1");
+  path = "/logs/s.jsonl";
+  await view.refresh(cx);
+  assert.match(textOf(view.render(cx)), /No messages yet/);
 });
 
 test("switching agents shows the other agent's rows", async () => {

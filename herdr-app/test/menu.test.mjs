@@ -20,7 +20,7 @@ test("a tab's menu: rename, move, terminal, panes, splits, put away, close; ends
   const list = fake.spaces[0].tabs;
   const labels = (items) => items.filter(Boolean).map((i) => i.label);
   assert.deepEqual(labels(tabItems(list[0], { agent: fake.agents[0], list })),
-    ["Rename…", "Move right", "Open terminal", "Show panes", "Split right", "Split down", "Put away", "Close tab"]);
+    ["Rename…", "Move right", "Open terminal", "Show panes", "Split left", "Split right", "Split down", "Put away", "Close tab"]);
   assert.deepEqual(labels(tabItems(list[1], { list, spaceId: "sp1" })), ["Open", "Rename…", "Move left", "Put away", "Close tab"]);
   assert.deepEqual(labels(spaceItems(fake.spaces[0])), ["New tab here", "Rename…", "Close workspace…"]);
 });

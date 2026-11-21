@@ -4,7 +4,7 @@
 import { div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView, Scrollbar, v_virtual_list, VirtualListScrollHandle } from "gpui-base";
 import { theme, run, shared, settings } from "herdr";
-import { currentAgent, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H } from "./state.js";
+import { currentAgent, openTerminal, machineOf, icon, SPIN_MS, FADE, shownScreen, watchEdge, noteWindowHeight, KEY_WIN_H } from "./state.js";
 import { Appear } from "./motion.js";
 import { now, record, flush, loadTiming } from "./timing.js";
 import * as sidecar from "./sidecar.js";
@@ -387,7 +387,11 @@ export class ChatView {
     if (!f) main = this.center(t, "No agent to show. Start one with +.");
     else if (f.error && !f.rows.length) main = this.problem(t, f.error);
     else if (!f.loaded) main = this.center(t, "Loading…");
-    else if (!f.rows.length) main = this.center(t, f.path ? "No messages yet." : "No conversation yet. Send the first message.");
+    else if (!f.path && !f.rows.length) {
+      const agent = currentAgent();
+      main = this.center(t, "Looking for this agent’s conversation…").gap(10)
+        .when(agent?.address === this.address, (el) => el.child(this.helper.button(t, "unlinked-terminal", "Open terminal", "plain", () => openTerminal(agent))));
+    } else if (!f.rows.length) main = this.center(t, "No messages yet.");
     else main = this.list(t, f);
     const stop = (_e, cx) => cx.stop_propagation();
     return watchEdge(v_flex().id("root").relative().size_full().min_w(0).bg(t.background))

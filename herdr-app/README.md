@@ -8,6 +8,14 @@ Flockbook's reading view, rebuilt as a herdr-app layout and mod. It shows each c
 conversation instead of a terminal: a floating tab bar with one pill per agent, chat bubbles,
 tool-call chips, a status tag row, and a composer.
 
+Select **Agents** in the top bar to open a conversation by its Herdr terminal ID.
+Child agents appear beneath their parent, including children running in the background.
+If Flockbook is still looking for the transcript, **Open terminal** shows the agent's live terminal.
+
+Use **Split ▾ → Split left** or **Split right** to open a pane on that side.
+The same actions are available as `herdr-app do flockbook.agents`,
+`herdr-app do flockbook.split-left` and `herdr-app do flockbook.split-right`.
+
 It needs no change to herdr-app. Where herdr-app's mod API cannot do what Flockbook does, this
 version comes close or leaves the feature out.
 

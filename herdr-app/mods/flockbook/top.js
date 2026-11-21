@@ -4,7 +4,7 @@ import { div, svg, image } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { theme, layout, window, settings, openOverlay, run, setAgentOrder, nextCommand, shared, setShared } from "herdr";
 import { openMenu, tabItems } from "./menu.js";
-import { spaceAgents, spaceTabs, activeTab, currentTerminal, tabLabel, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
+import { spaceAgents, spaceTabs, activeTab, currentTerminal, currentAgent, splitTarget, splitWork, finishLeftSplit, pickedChatFor, showAgent, tabLabel, screenFor, showTab, closeTab, openTerminal, showNeeds, icon, tabAgents, shownScreen,
   SPIN_MS, FADE, sidebarShown, toggleSidebar, loadSidebar, showScreen, showOverview, showSettings, watchEdge } from "./state.js";
 import { loadConfig, pollUpdate, updateDot, stepTextSize } from "./config.js";
 import { dragger, dropPlace } from "./drag.js";
@@ -35,6 +35,10 @@ export function lightsRoom() {
 
 export const BAR_H = 56;
 
+function openAgents() {
+  return openOverlay({ mod: "flockbook", props: { view: "agents" }, kind: "dialog", width: 460, height: 0.6 });
+}
+
 // The tab being dragged (drag.js): one at a time, so every copy of the bar draws from it.
 const drag = dragger("x");
 export { dropPlace };
@@ -44,6 +48,8 @@ const KEY_CMD = "flockbook.command";   // the last key command and when, so two 
 // Keys bound to "flockbook.<command>" in keys.json.
 export function command(c) {
   const tabs = spaceTabs(), tab = activeTab(), i = tabs.findIndex((x) => x.id === tab?.id);
+  if (c === "agents") return openAgents();
+  if (c === "split-left" || c === "split-right") return splitWork(c.slice(6), tab?.id);
   if (c === "terminal") return openTerminal(currentTerminal());
   if (c === "needs") return showNeeds();
   if (c === "sidebar") return toggleSidebar();
@@ -83,13 +89,15 @@ export function startTop(cx, owner) {
 // shell. It acts only when the tab changes or an agent starts or stops in it, so a choice
 // made by hand (Needs you, the tab's terminals) stays until then.
 export function syncScreen(owner) {
+  finishLeftSplit();
   const tab = activeTab();
-  const now = tab ? `${tab.id}:${screenFor(tab)}` : null;
+  const screen = screenFor(tab);
+  const now = tab ? `${tab.id}:${tab.panes}:${screen}` : null;
   if (now === owner.seen) return;
   owner.seen = now;
-  if (!tab) return;
+  if (!tab || pickedChatFor(tab)) return;
   // layout() is the file, not the live tree, so the shown screen is unknown: select it outright.
-  showScreen(screenFor(tab));
+  showScreen(screen);
 }
 
 // The bar: the sidebar button, the tab capsule, the tools capsule. `over`: drawn over a screen's
@@ -132,7 +140,7 @@ export function topBar(t, over = false) {
         const shown = drag.shown;
         drag.cancel(cx);
         if (shown) return;
-        openMenu(tabItems(tab, { agent: tabAgents(tab.id)[0] ?? null, list: tabs })); })
+        openMenu(tabItems(tab, { agent: (on ? currentAgent() : tabAgents(tab.id)[0]) ?? null, list: tabs })); })
       .when(Boolean(line), (el) => el.child(div().id("drop-line").absolute().top(2).bottom(2).w(3).rounded(2).bg(t.accent)
         .when(line.after, (l) => l.right(-3.5)).when(!line.after, (l) => l.left(-3.5))))
       .child(statusMark(tab.status, t))
@@ -157,7 +165,16 @@ export function topBar(t, over = false) {
       .when(Boolean(dragging), (el) => el.cursor_grabbing())
       .children(tabs.map(pill))
       : div().px(12).text_size(12.5).text_color(t.muted).child("No tabs in this space"));
+  const labelButton = (id, label, action, tip) => button(id, label, action, 30, tip)
+    .w_auto().px(8).text_size(12).font_medium();
+  const tab = activeTab(), canSplit = splitTarget(), chat = currentAgent();
   const tools = capsule("tools").px(5).gap(4)
+    .child(labelButton("agents", "Agents", openAgents, "Open an agent conversation"))
+    .when(Boolean(canSplit), (el) => el.child(labelButton("split-menu", "Split ▾", () => openMenu([
+      { label: "Split left", act: "split", args: { tab: tab.id, direction: "left" } },
+      { label: "Split right", act: "split", args: { tab: tab.id, direction: "right" } },
+    ]), "Split the work area side by side")))
+    .when(shownScreen() === "tab" && Boolean(chat), (el) => el.child(labelButton("show-chat", "Chat", () => showAgent(chat.address), "Return to the conversation")))
     .child(button("new", svg(icon("plus")).size(15), () => openOverlay({ mod: "new-menu", kind: "popup", width: 250, height: 512 }), 30, "New tab (⌘T)"))
     .when(Boolean(cur), (el) => el.child(button("terminal", svg(icon("terminal")).size(16), () => openTerminal(cur), 30, "Agent's terminal (⌃`)")));
 

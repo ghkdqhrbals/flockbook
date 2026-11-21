@@ -190,7 +190,7 @@ fn resolve(ws: &[Workspace], resolver: &mut SessionResolver, cache: &Cache, cach
     let agents = local_agents(ws);
     let needs: Vec<Need> = agents
         .iter()
-        .map(|p| Need::new(&p.id, &p.agent.as_ref().unwrap().kind, &p.cwd, p.process_ids.clone()))
+        .filter_map(|p| Need::from_pane(p))
         .collect();
     let found = resolver.resolve(&needs, &HashSet::new());
     let mut next = Cache { feeds: cache.feeds.clone(), ..Default::default() };

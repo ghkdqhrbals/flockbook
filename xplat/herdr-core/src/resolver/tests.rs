@@ -1142,3 +1142,77 @@ fn runs_checks_the_real_executable() {
     let procs = [proc_(10, 1, t0, "script claude"), proc_(11, 10, t0, "-zsh")];
     assert_eq!(agent_in_tree(1, "claude", &procs, false), None, "script with a shell under it: no agent");
 }
+
+#[test]
+fn codex_launch_matches_the_first_authored_event_across_same_directory_threads() {
+    use crate::hc::mapper::{pane, Term};
+    use serde_json::json;
+
+    let (_tmp, root) = tmp();
+    let started = Utc::now() - Duration::minutes(5);
+    let cwd = "/fixture";
+    let task = "Check the first change.\nThen check the second.";
+    let unrelated = "Run a different task.";
+    let make_need = |tid: &str, pid: i32| {
+        let term = Term::parse(&json!({
+            "address":tid, "pid":pid, "cwd":cwd,
+            "foreground":{"pid":pid, "name":"codex", "argv":["codex","--search",task]}
+        })).unwrap();
+        Need::from_pane(&pane(&term)).unwrap()
+    };
+    let primary = make_need("t1", 401);
+    let peer = make_need("t2", 402);
+    let procs = [proc_(401, 1, started, "codex"), proc_(402, 1, started, "codex")];
+    let resolve = |needs: &[Need], claimed: HashSet<String>| {
+        let mut r = resolver(|r| r.codex_dir = root.clone());
+        r.resolve_with(needs, &claimed, &HashMap::new(), Some(&procs)).get("hc:t1").cloned()
+    };
+    let first_event = |text: &str| json!({
+        "type":"event_msg", "payload":{"type":"item_completed", "item":{
+            "type":"UserMessage", "content":[{"type":"text","text":text}]
+        }}
+    }).to_string();
+    let legacy = |text: &str| json!({"type":"event_msg","payload":{"type":"user_message","message":text}}).to_string();
+    let write_rollout = |id: &str, delta: i64, body: &[String]| {
+        let start = started + Duration::seconds(delta);
+        let dir = day_folder(&root, local_naive(start).date());
+        fs::create_dir_all(&dir).unwrap();
+        let path = format!("{dir}/{}", rollout_name(start, id));
+        let header = json!({"type":"session_meta","payload":{"id":id,"cwd":cwd,"timestamp":iso(start)}});
+        fs::write(&path, format!("{header}\n{}\n",body.join("\n"))).unwrap();
+        path
+    };
+    let injected = json!({"type":"response_item","payload":{"type":"message","role":"user",
+        "content":[{"type":"input_text","text":task}]}}).to_string();
+    let wrong = write_rollout("other", 1, &[injected.clone(), first_event(unrelated), first_event(task)]);
+    let only = std::slice::from_ref(&primary);
+    assert_eq!(resolve(only, set(&[])), None, "the launch task appearing later or as injected context never matches");
+    let own = write_rollout("own", 2, &[injected, first_event(task)]);
+    assert_eq!(resolve(only, set(&[])), Some(own.clone()));
+    assert_eq!(resolve(only, set(&[&own])), None, "a claimed exact match cannot give the pane its sibling's log");
+    assert_eq!(resolve(&[primary.clone(), peer], set(&[])), None, "two live launches share one task and only one has a log");
+    write_rollout("other", 1, &[legacy(task)]);
+    assert_eq!(resolve(only, set(&[])), None, "identical launch messages are ambiguous");
+    fs::write(&wrong, format!("{}\n{{", fs::read_to_string(&wrong).unwrap().lines().next().unwrap())).unwrap();
+    assert_eq!(resolve(only, set(&[])), None, "a candidate without a complete user event has unknown identity");
+}
+
+#[test]
+fn codex_launch_only_uses_unambiguous_local_argv() {
+    use crate::hc::mapper::{agent, Term};
+    let digest = |address: &str, argv: &[&str]| {
+        let t = Term { address: address.into(), fg_pid: Some(13),
+            fg_argv: argv.iter().map(|s| s.to_string()).collect(), ..Default::default() };
+        agent(&t).and_then(|a| a.codex_prompt)
+    };
+    let task = "Analyze this fixture";
+    assert_eq!(digest("t1", &["/bin/codex", task]), Some(prompt_digest(task)));
+    assert_eq!(digest("t1", &["codex", "--search", "--no-alt-screen", task]), Some(prompt_digest(task)));
+    assert_eq!(digest("t1", &["codex", "--", "--literal"]), Some(prompt_digest("--literal")));
+    assert_eq!(digest("t1", &["codex", "--search", "--", "review"]), Some(prompt_digest("review")));
+    for ignored in [&["env", "codex", task][..], &["codex", "--future-option", task],
+        &["codex", "-c", "key=value", task], &["codex", "resume", task], &["codex", "review"], &["codex", "--search"]] {
+        assert_eq!(digest("t1", ignored), None);
+    }
+    assert_eq!(digest("remote/t1", &["codex", task]), None);
+}

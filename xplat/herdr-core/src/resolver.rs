@@ -1,12 +1,12 @@
 //! Finds the log of an agent pane that herdr reports without `agent_session` (Swift: `SessionResolver.swift`).
-//! Read-only: one process listing, the open files of the agent's process tree, and the first line of candidate logs.
+//! Read-only: one process listing, the open files of the agent's process tree, and bounded prefixes of candidate logs.
 //! It never sends anything to a pane. Synchronous (Swift: an actor).
 //!
 //! 1. The pane's process: TUI panes by `HERDR_PANE_ID` + `HERDR_SOCKET_PATH` in the env; hc panes by their pids.
 //! 2. A log file that the agent's process tree holds open. Exactly one, or none.
 //! 3. Grok Build only: the session `active_sessions.json` lists for the agent's pid.
 //! 4. Codex only: the rollout whose `session_meta` cwd is the pane's cwd and that started at or after the agent.
-//!    Exactly one unclaimed match, or none.
+//!    A direct hc launch task must match the first user event in exactly one unclaimed rollout.
 //!
 //! Processes and open files come from a [`ProcessSource`]: macOS (and other unix) run `ps` and `lsof` as Swift does;
 //! Linux reads `/proc` (with the environ, like `ps -E`); Windows lists processes with the `sysinfo` crate but cannot
@@ -17,6 +17,7 @@ use crate::session_log::{self, deleting_last_path_component, home_dir, is_abs_pa
 use crate::util::Date;
 use chrono::{DateTime, Duration, Local, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
@@ -52,11 +53,20 @@ pub struct Need {
     pub cwd: String,
     /// hc panes: process ids to start from (foreground first). Empty for TUI panes (found by `HERDR_PANE_ID`).
     pub pids: Vec<i32>,
+    pub codex_prompt: Option<[u8; 32]>,
 }
 
 impl Need {
     pub fn new(pane_id: &str, kind: &str, cwd: &str, pids: Vec<i32>) -> Need {
-        Need { pane_id: pane_id.into(), kind: kind.into(), cwd: cwd.into(), pids }
+        Need { pane_id: pane_id.into(), kind: kind.into(), cwd: cwd.into(), pids, codex_prompt: None }
+    }
+
+    pub fn from_pane(pane: &crate::Pane) -> Option<Need> {
+        let agent = pane.agent.as_ref()?;
+        Some(Need {
+            codex_prompt: agent.codex_prompt,
+            ..Need::new(&pane.id, &agent.kind, &pane.cwd, pane.process_ids.clone())
+        })
     }
 }
 
@@ -484,11 +494,20 @@ impl SessionResolver {
                     }
                 }
                 let mine = pi_starts.iter().find(|(pane, _, _)| pane == &n.pane_id).map(|(_, d, _)| d);
-                let rivals: Vec<Date> = pi_starts
-                    .iter()
-                    .filter(|(pane, d, _)| pane != &n.pane_id && Some(d) == mine)
-                    .map(|(_, _, s)| *s)
-                    .collect();
+                let rivals: Vec<Date> = if n.codex_prompt.is_some() {
+                    // Both terminals may start the same task before both rollouts have been written.
+                    // An open log is still decisive, but one matching task cannot distinguish them.
+                    needs.iter()
+                        .filter(|other| other.pane_id != n.pane_id && other.codex_prompt == n.codex_prompt
+                            && standardize_path(&other.cwd) == standardize_path(&n.cwd))
+                        .filter_map(|other| agent_of(other).map(|p| p.start))
+                        .collect()
+                } else {
+                    pi_starts.iter()
+                        .filter(|(pane, d, _)| pane != &n.pane_id && Some(d) == mine)
+                        .map(|(_, _, s)| *s)
+                        .collect()
+                };
                 let found = agent.as_ref().map(|a| self.find(n, a, procs, &taken, claimed_cwd, &rivals));
                 let claude_hc = !n.pids.is_empty() && n.kind == "claude";
                 // Unresolved: watch the agent's own file, where a new session id would most likely appear.
@@ -624,8 +643,25 @@ impl SessionResolver {
             return (None, None);
         }
         // Every candidate's session_meta cwd is `n.cwd`: a claim by a pane elsewhere is a wrong report, not a rival.
-        let c: Vec<String> = codex_candidates(&self.codex_dir, &n.cwd, agent.start, Utc::now())
-            .into_iter()
+        let candidates = codex_candidates(&self.codex_dir, &n.cwd, agent.start, Utc::now());
+        if let Some(prompt) = n.codex_prompt {
+            if !rivals.is_empty() {
+                return (None, None);
+            }
+            let mut matched = None;
+            for path in candidates {
+                // An unreadable or incomplete candidate could have the same first message. Wait for evidence.
+                let Some(first) = codex_first_prompt(&path) else { return (None, None) };
+                if first == prompt {
+                    if matched.is_some() || is_claimed_in_cwd(&path, claimed, &n.cwd, claimed_cwd) {
+                        return (None, None);
+                    }
+                    matched = Some(path);
+                }
+            }
+            return (matched, None);
+        }
+        let c: Vec<String> = candidates.into_iter()
             .filter(|p| !is_claimed_in_cwd(p, claimed, &n.cwd, claimed_cwd))
             .collect();
         if c.len() == 1 {
@@ -1240,6 +1276,36 @@ pub fn codex_candidates(dir: &str, cwd: &str, after: Date, now: Date) -> Vec<Str
     }
     out.sort();
     out
+}
+
+pub(crate) fn prompt_digest(prompt: &str) -> [u8; 32] {
+    Sha256::digest(prompt.as_bytes()).into()
+}
+
+/// The first user-authored input event. Raw response_item messages can include environment instructions and
+/// mirrored history. Never match a later turn or a partial line. A missing event is unknown.
+fn codex_first_prompt(path: &str) -> Option<[u8; 32]> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut input = std::io::BufReader::new(file.take(1 << 20));
+    let mut line = Vec::new();
+    loop {
+        use std::io::BufRead;
+        line.clear();
+        input.read_until(b'\n', &mut line).ok()?;
+        if line.last() != Some(&b'\n') { return None; }
+        let event: Value = serde_json::from_slice(&line).ok()?;
+        if event["type"] != "event_msg" { continue; }
+        let payload = &event["payload"];
+        match payload["type"].as_str() {
+            Some("user_message") => return payload["message"].as_str().map(prompt_digest),
+            Some("item_completed") if payload["item"]["type"] == "UserMessage" => {
+                let [part] = payload["item"]["content"].as_array()?.as_slice() else { return None };
+                if part["type"] != "text" { return None; }
+                return part["text"].as_str().map(prompt_digest);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// cwd and start time from a rollout's first line (`session_meta`). Reads at most 1 MB.

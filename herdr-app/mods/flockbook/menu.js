@@ -2,8 +2,9 @@
 // and its arguments, or one of the mod's own actions) because the popup is another copy of the mod.
 import { div } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { theme, props, run, openOverlay, closeOverlay, agents, shared, setShared } from "herdr";
-import { openTerminal, showScreen, shownScreen, showAgent, openTab, showSettings, KEY_SCREEN, KEY_REMOVE, machineOf } from "./state.js";
+import { theme, props, run, openOverlay, closeOverlay, setShared } from "herdr";
+import { openTerminal, showScreen, shownScreen, showAgent, openTab, showSettings, splitWork, currentAgent, KEY_REMOVE, machineOf } from "./state.js";
+import { agentTree } from "./agent-tree.js";
 import { setting } from "./config.js";
 
 const ROW_H = 28, PAD = 6, WIDTH = 220;
@@ -24,9 +25,10 @@ export function act(item) {
   if (item.cmd) return run(item.cmd, item.args ?? {});
   const a = item.args ?? {};
   switch (item.act) {
-    case "terminal": return openTerminal(agents().find((x) => x.address === a.address) ?? null);
+    case "terminal": return openTerminal(agentTree().find((x) => x.address === a.address) ?? null);
     case "panes": return showScreen("tab");
-    case "chat": return showScreen("chat");
+    case "chat": return showAgent(currentAgent()?.address);
+    case "split": return splitWork(a.direction, a.tab);
     case "open-agent": return showAgent(a.address);
     case "open-tab": return openTab(a.space, { id: a.tab });
     // The chat shows a card that asks before anything is removed.
@@ -49,8 +51,9 @@ export function tabItems(tab, { agent = null, spaceId = null, list = [] } = {}) 
     i >= 0 && i < list.length - 1 ? { label: "Move right", cmd: "tab.move", args: { id: tab.id, index: list[i + 1].index } } : null,
     agent ? { label: "Open terminal", act: "terminal", args: { address: agent.address }, sep: true } : null,
     shown && agent ? (shownScreen() === "tab" ? { label: "Show chat", act: "chat" } : { label: "Show panes", act: "panes" }) : null,
-    shown ? { label: "Split right", cmd: "pane.split", args: { direction: "right" } } : null,
-    shown ? { label: "Split down", cmd: "pane.split", args: { direction: "down" } } : null,
+    shown ? { label: "Split left", act: "split", args: { tab: tab.id, direction: "left" } } : null,
+    shown ? { label: "Split right", act: "split", args: { tab: tab.id, direction: "right" } } : null,
+    shown ? { label: "Split down", act: "split", args: { tab: tab.id, direction: "down" } } : null,
     // Never: nothing runs there, and nothing is removed from here either; the line says where to change that.
     machine ? (setting("remote_helper") !== "never"
       ? { label: `Remove helper from ${machine}…`, act: "remove-helper", args: { machine }, sep: true }

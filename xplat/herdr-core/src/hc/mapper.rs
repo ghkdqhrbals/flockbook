@@ -265,6 +265,27 @@ pub fn status(word: Option<&str>) -> AgentStatus {
     }
 }
 
+/// Read the initial task from the local foreground's structured argv. Never treat an option
+/// value, subcommand argument or wrapper command as a task.
+fn codex_launch_prompt(t: &Term) -> Option<&str> {
+    if t.address.contains('/') || !t.fg_pid.is_some_and(|p| p > 0) {
+        return None;
+    }
+    let (exe, mut args) = t.fg_argv.split_first()?;
+    if last_path_component(exe) != "codex" {
+        return None;
+    }
+    while matches!(args.first().map(String::as_str), Some("--search" | "--no-alt-screen" | "--no-daemon")) {
+        args = &args[1..];
+    }
+    match args {
+        [end, text] if end == "--" && !text.trim().is_empty() => Some(text),
+        // A single word can be a CLI subcommand; a positional argument with embedded whitespace cannot.
+        [text] if !text.starts_with('-') && text.split_whitespace().nth(1).is_some() => Some(text),
+        _ => None,
+    }
+}
+
 pub fn agent_with(t: &Term, check: &dyn AgentCheck) -> Option<Agent> {
     let k = kind(t);
     if k.is_none() && t.status.is_none() {
@@ -289,6 +310,7 @@ pub fn agent_with(t: &Term, check: &dyn AgentCheck) -> Option<Agent> {
         backend: BackendKind::Hc,
         status_kind,
         process: process_with(t, k.as_deref(), check),
+        codex_prompt: codex_launch_prompt(t).map(crate::resolver::prompt_digest),
     })
 }
 

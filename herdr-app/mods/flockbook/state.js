@@ -1,9 +1,17 @@
 // What every view agrees on: the agent shown in the chat, and the screen in the stack.
 // Kept in shared() so the copies of this mod (one per layout block) see the same value.
 import { agents, panes, focused, shared, setShared, run, spaces, openOverlay, closeOverlay, appHome, readTextFile } from "herdr";
+import { agentTree } from "./agent-tree.js";
 import { loadConfig, updateSeen } from "./config.js";
 
 export const KEY_AGENT = "flockbook.agent";
+// An explicit chat selection wins over the split tab's automatic pane view.
+const KEY_CHAT_TAB = "flockbook.chat.tab";
+export function pickedChatFor(tab) {
+  const pick = shared(KEY_CHAT_TAB);
+  return shownScreen() === "chat" && pick?.tab === tab.id && pick.panes === tab.panes &&
+    Boolean(shared(KEY_AGENT)) && currentAgent()?.address === shared(KEY_AGENT);
+}
 // The screen in the stack, as this mod last selected it (layout() is the file, not the live tree).
 export const KEY_SCREEN = "flockbook.screen";
 // The machine whose Flockbook helper the tab menu asked to remove (the chat asks first).
@@ -90,7 +98,7 @@ export async function loadSidebar() {
 // The agents of the shown space, in herdr's order.
 export function spaceAgents() {
   const space = spaces().find((s) => s.active);
-  const all = agents();
+  const all = agentTree();
   return space ? all.filter((a) => a.space === space.id) : all;
 }
 
@@ -107,8 +115,13 @@ export function currentAgent() {
   const list = tab ? tabAgents(tab.id) : spaceAgents();
   const picked = shared(KEY_AGENT);
   const f = focused();
-  return list.find((a) => a.address === picked)
-    ?? list.find((a) => f && (a.address === f.agent || a.address === f.terminal))
+  if (picked) {
+    const selected = list.find((a) => a.address === picked);
+    if (selected) return selected;
+    const child = agentTree().find((a) => a.address === picked);
+    if (child && (child.tab === tab?.id || (!child.tab && shared(KEY_CHAT_TAB)?.tab === (tab?.id ?? null)))) return child;
+  }
+  return list.find((a) => f && (a.address === f.agent || a.address === f.terminal))
     ?? list[0] ?? null;
 }
 
@@ -138,7 +151,7 @@ export function tabLabel(tab) {
 export const screenFor = (tab) => (tab && tabAgents(tab.id).length && (tab.panes ?? 1) <= 1 ? "chat" : "tab");
 
 export function showTab(tab) {
-  setShared(KEY_AGENT, null);
+  if (activeTab()?.id !== tab.id) setShared(KEY_AGENT, null);
   run("tab.select", { id: tab.id });
   showScreen(screenFor(tab));
 }
@@ -152,14 +165,91 @@ export const closeAgent = (a) => closeTab(a.tab);
 // A label for people: the tab's name when someone named it, else the program ("Claude Code").
 export function agentName(a) {
   if (!a) return "";
+  if (a.parent && a.name) return a.name;
   if (a.tab_name && !/^\d+$/.test(a.tab_name) && !/^tb\d+$/.test(a.tab_name)) return a.tab_name;
   return a.program?.name ?? a.app ?? "Agent";
 }
 
 export function showAgent(address) {
+  const a = agentTree().find((row) => row.address === address);
+  if (!a) return;
+  const tab = a.tab ? spaces().find((s) => s.id === a.space)?.tabs?.find((tab) => tab.id === a.tab) : activeTab();
+  if (a.pane) {
+    if (tabAgents(a.tab).some((agent) => agent.address === address)) run("agent.focus", { terminal: address });
+    else run("pane.focus", { pane: a.pane });
+  } else if (a.tab) {
+    // agent.focus can peek an unkept child over the layout. Select its home
+    // tab and let the Flockbook feed and composer use the child's own address.
+    if (activeSpace()?.id !== a.space) run("space.select", { id: a.space });
+    if (activeTab()?.id !== a.tab) run("tab.select", { id: a.tab });
+  }
   setShared(KEY_AGENT, address);
-  run("agent.focus", { terminal: address });
+  setShared(KEY_CHAT_TAB, { tab: tab?.id ?? null, panes: tab?.panes ?? null });
   showScreen("chat");
+}
+
+// In chat the selected conversation is the target. In the pane view the
+// user may be working in a different shell or mod pane in the same tab.
+export function splitTarget() {
+  const tab = activeTab();
+  if (!tab) return null;
+  const list = panes().filter((p) => p.tab === tab.id);
+  const f = focused();
+  const focusedPane = list.find((p) => p.pane === f?.pane || p.focused) ?? (list.length === 1 ? list[0] : null);
+  if (shownScreen() === "chat") {
+    const agent = currentAgent();
+    if (agent) {
+      const pane = list.find((p) => p.terminal === agent.address);
+      if (pane) return { pane: pane.pane, agent: agent.address };
+      const anchor = agent.anchorPane ? list.find((p) => p.pane === agent.anchorPane) : focusedPane;
+      if (!agent.pane && anchor && machineOf(agent.address) === (activeSpace()?.machine ?? null)) {
+        return { pane: anchor.pane, keep: agent.address, agent: agent.address };
+      }
+      return null;
+    }
+  }
+  return focusedPane ? { pane: focusedPane.pane } : null;
+}
+
+// run() queues a command but returns no pane id. Only swap a newly observed
+// pane with the original, never a pre-existing neighbour. The top view's timer
+// outlives the menu that may have started the split.
+let pendingLeft = null;
+export function finishLeftSplit() {
+  if (!pendingLeft) return;
+  const request = pendingLeft;
+  if (activeTab()?.id !== request.tab || Date.now() >= request.expires) { pendingLeft = null; return; }
+  const list = panes().filter((p) => p.tab === request.tab);
+  if (!list.some((p) => p.pane === request.source)) { pendingLeft = null; return; }
+  const added = list.filter((p) => !request.before.has(p.pane));
+  const created = request.keep ? added.find((p) => p.terminal === request.keep) : added[0];
+  if (!created) return;
+  pendingLeft = null;
+  if (!request.keep && (added.length !== 1 || list.length !== request.before.size + 1)) return;
+  run("pane.swap", { pane: created.pane, target: request.source });
+}
+
+export function splitWork(direction, tabId) {
+  if (activeTab()?.id !== tabId) return;
+  const target = splitTarget();
+  if (!target) return;
+  finishLeftSplit();
+  if (pendingLeft) return;
+  pendingLeft = direction === "left" ? {
+    tab: tabId, source: target.pane, keep: target.keep,
+    before: new Set(panes().filter((p) => p.tab === tabId).map((p) => p.pane)),
+    expires: Date.now() + (target.keep ? 30_000 : 3_000),
+  } : null;
+  const side = direction === "left" ? "right" : direction;
+  if (target.agent) setShared(KEY_AGENT, target.agent);
+  if (target.keep) {
+    run("pane.focus", { pane: target.pane });
+    run("terminal.keep", { terminal: target.keep, place: side });
+  } else {
+    run("pane.split", { pane: target.pane, direction: side });
+  }
+  // syncScreen reveals the native split when Herdr's pane count changes.
+  // In particular, terminal.keep may still be pending or fail remotely.
 }
 
 export function showNeeds() { showScreen("needs"); }

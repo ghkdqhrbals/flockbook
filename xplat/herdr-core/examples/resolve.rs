@@ -31,7 +31,7 @@ fn main() {
 
     let needs: Vec<Need> = panes
         .iter()
-        .filter_map(|p| p.agent.as_ref().map(|a| Need::new(&p.id, &a.kind, &p.cwd, p.process_ids.clone())))
+        .filter_map(|p| Need::from_pane(p))
         .collect();
     let resolved = SessionResolver::new(&session.socket_path).resolve(&needs, &HashSet::new());
 

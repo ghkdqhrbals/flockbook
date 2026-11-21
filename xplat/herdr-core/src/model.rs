@@ -76,6 +76,8 @@ pub struct Agent {
     /// hc only: the agent's process in the terminal, `<pid>@<created_ms>` (`hc::mapper::process`). A key gate binds to
     /// it: hc gives no session id. `None` otherwise (keys then fail closed).
     pub process: Option<String>,
+    /// Fingerprint of a directly launched Codex task. Never store the task text in the lookup cache.
+    pub codex_prompt: Option<[u8; 32]>,
 }
 
 impl Agent {
